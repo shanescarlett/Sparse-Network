@@ -47,7 +47,7 @@ from keras import optimizers
 import numpy as np
 from keras import backend as K
 from advanced_activations import SReLU
-from keras.datasets import cifar10
+from keras.datasets import cifar10, mnist
 from keras.utils import np_utils
 
 
@@ -107,7 +107,7 @@ class SET_MLP_CIFAR10:
 		self.momentum = 0.9  # SGD momentum
 
 		# generate an Erdos Renyi sparse weights mask for each layer
-		[self.noPar1, self.wm1] = createWeightsMask(self.epsilon, 32 * 32 * 3, 4000)
+		[self.noPar1, self.wm1] = createWeightsMask(self.epsilon, 28 * 28 * 1, 4000)
 		[self.noPar2, self.wm2] = createWeightsMask(self.epsilon, 4000, 1000)
 		[self.noPar3, self.wm3] = createWeightsMask(self.epsilon, 1000, 4000)
 
@@ -132,7 +132,7 @@ class SET_MLP_CIFAR10:
 
 		# create a SET-MLP model for CIFAR10 with 3 hidden layers
 		self.model = Sequential()
-		self.model.add(Flatten(input_shape = (32, 32, 3)))
+		self.model.add(Flatten(input_shape = (1, 28, 28)))
 		self.model.add(Dense(4000, name = "sparse_1", kernel_constraint = MaskWeights(self.wm1), weights = self.w1))
 		self.model.add(SReLU(name = "srelu1", weights = self.wSRelu1))
 		self.model.add(Dropout(0.3))
@@ -156,10 +156,10 @@ class SET_MLP_CIFAR10:
 		largestNegative = values[int((1 - self.zeta) * firstZeroPos)]
 		smallestPositive = values[
 			int(min(values.shape[0] - 1, lastZeroPos + self.zeta * (values.shape[0] - lastZeroPos)))]
-		rewiredWeights = weights.copy();
-		rewiredWeights[rewiredWeights > smallestPositive] = 1;
-		rewiredWeights[rewiredWeights < largestNegative] = 1;
-		rewiredWeights[rewiredWeights != 1] = 0;
+		rewiredWeights = weights.copy()
+		rewiredWeights[rewiredWeights > smallestPositive] = 1
+		rewiredWeights[rewiredWeights < largestNegative] = 1
+		rewiredWeights[rewiredWeights != 1] = 0
 		weightMaskCore = rewiredWeights.copy()
 
 		# add zeta random weights
@@ -193,6 +193,14 @@ class SET_MLP_CIFAR10:
 		self.w2[0] = self.w2[0] * self.wm2Core
 		self.w3[0] = self.w3[0] * self.wm3Core
 
+		zeroCount = np.sum(np.equal(self.w1[0], 0)) + np.sum(np.equal(self.w2[0], 0)) + np.sum(np.equal(self.w3[0], 0))
+		allCount = np.size(self.w1[0])+np.size(self.w2[0])+np.size(self.w3[0])
+		print('Zero: ' + str(zeroCount))
+		print('All: ' + str(allCount))
+		print('Sparsity: ' + str(zeroCount/allCount))
+		self.sparsity_per_epoch.append(zeroCount/allCount)
+
+
 	def train(self):
 
 		# read CIFAR10 data
@@ -216,15 +224,19 @@ class SET_MLP_CIFAR10:
 
 		# training process in a for loop
 		self.accuracies_per_epoch = []
+		self.sparsity_per_epoch = []
 		for epoch in range(0, self.maxepoches):
 			sgd = optimizers.SGD(lr = self.learning_rate, momentum = self.momentum)
 			self.model.compile(loss = 'categorical_crossentropy', optimizer = sgd, metrics = ['accuracy'])
 
-			historytemp = self.model.fit_generator(datagen.flow(x_train, y_train,
-			                                                    batch_size = self.batch_size),
-			                                       steps_per_epoch = x_train.shape[0] // self.batch_size,
-			                                       epochs = epoch,
-			                                       validation_data = (x_test, y_test),
+			# historytemp = self.model.fit_generator(datagen.flow(x_train, y_train,
+			# 			#                                                     batch_size = self.batch_size),
+			# 			#                                        steps_per_epoch = x_train.shape[0] // self.batch_size,
+			# 			#                                        epochs = epoch,
+			# 			#                                        validation_data = (x_test, y_test),
+			# 			#                                        initial_epoch = epoch - 1)
+
+			historytemp = self.model.fit(x_train, y_train, batch_size = self.batch_size, epochs = epoch, validation_data = (x_test, y_test),
 			                                       initial_epoch = epoch - 1)
 
 			self.accuracies_per_epoch.append(historytemp.history['val_acc'][0])
@@ -233,23 +245,31 @@ class SET_MLP_CIFAR10:
 			self.weightsEvolution()
 			K.clear_session()
 			self.create_model()
+			np.savetxt('set_train_accuracy.csv', np.asarray(self.accuracies_per_epoch), fmt = '%f', encoding = 'utf8')
+			np.savetxt('set_train_sparsity.csv', np.asarray(self.sparsity_per_epoch), fmt = '%f', encoding = 'utf8')
 
 		self.accuracies_per_epoch = np.asarray(self.accuracies_per_epoch)
+
 
 	def read_data(self):
 
 		# read CIFAR10 data
-		(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+		(x_train, y_train), (x_test, y_test) = mnist.load_data()
+		x_train = np.reshape(x_train, (x_train.shape[0], 1, 28, 28))
+		x_test = np.reshape(x_test, (x_test.shape[0], 1, 28, 28))
+
 		y_train = np_utils.to_categorical(y_train, self.num_classes)
 		y_test = np_utils.to_categorical(y_test, self.num_classes)
 		x_train = x_train.astype('float32')
 		x_test = x_test.astype('float32')
+		x_train /= 255
+		x_test /= 255
 
 		# normalize data
-		xTrainMean = np.mean(x_train, axis = 0)
-		xTtrainStd = np.std(x_train, axis = 0)
-		x_train = (x_train - xTrainMean) / xTtrainStd
-		x_test = (x_test - xTrainMean) / xTtrainStd
+		# xTrainMean = np.mean(x_train, axis = 0)
+		# xTtrainStd = np.std(x_train, axis = 0)
+		# x_train = (x_train - xTrainMean) / xTtrainStd
+		# x_test = (x_test - xTrainMean) / xTtrainStd
 
 		return [x_train, x_test, y_train, y_test]
 
