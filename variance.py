@@ -104,15 +104,31 @@ def getNetworkSize(layers):
 
 def main():
 	xTrain, yTrain, xTest, yTest, inputShape = getData()
-	model = keras.models.load_model('model.h5')
+	model: keras.models.Model = keras.models.load_model('model.h5')
 	model.summary()
 
-	variance = evaluateNeuronVariances(model, xTrain, batchSize = 128)
-	variance = normaliseVarianceByLayer(variance)
-	flatVariance = flattenLayers(variance)
-	import matplotlib.pyplot as plot
-	plot.hist(flatVariance, bins = 100)
-	plot.show()
+	recalculateVariance = False
+	if recalculateVariance:
+		variance = evaluateNeuronVariances(model, xTrain, batchSize = 128)
+		variance = normaliseVarianceByLayer(variance)
+		np.save('variance', variance)
+	else:
+		variance = np.load('variance.npy')
+
+	plotHistogram = False
+	if plotHistogram:
+		import matplotlib.pyplot as plot
+		flatVariance = flattenLayers(variance)
+		plot.hist(flatVariance, bins = 100)
+		plot.show()
+
+
+	weights = np.asarray([l.get_weights() for l in model.layers])
+	filt = []
+	filtVars = []
+	for i in range(32):
+		filt.append(weights[1][0][:, :, 0, i])
+		filtVars.append(variance[0][:, :, i])
 
 	print('End')
 
